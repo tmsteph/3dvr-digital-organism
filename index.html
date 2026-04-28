@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>3DVR Digital Organism</title>
+
+<style>
+  :root {
+    --bg: #050b12;
+    --panel: rgba(10, 20, 35, 0.85);
+    --glow: #00e0ff;
+    --accent: #7cffc4;
+    --text: #e6f1ff;
+    --muted: #7f9bb3;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: monospace;
+    background: radial-gradient(circle at top, #07121d, #02060a);
+    color: var(--text);
+  }
+
+  header {
+    padding: 20px;
+    text-align: center;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+  }
+
+  header h1 {
+    margin: 0;
+    font-size: 1.6rem;
+    color: var(--glow);
+  }
+
+  header p {
+    margin-top: 6px;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+
+  .grid {
+    display: grid;
+    gap: 16px;
+    padding: 16px;
+  }
+
+  @media (min-width: 800px) {
+    .grid {
+      grid-template-columns: repeat(3, 1fr);
+    }
+  }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid rgba(0, 255, 255, 0.1);
+    border-radius: 10px;
+    padding: 14px;
+    backdrop-filter: blur(6px);
+  }
+
+  .card h2 {
+    margin: 0 0 10px;
+    font-size: 1rem;
+    color: var(--accent);
+  }
+
+  .node {
+    padding: 8px;
+    margin: 6px 0;
+    border-radius: 6px;
+    background: rgba(255,255,255,0.03);
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.8rem;
+  }
+
+  .status {
+    color: var(--glow);
+  }
+
+  .console {
+    height: 200px;
+    overflow-y: auto;
+    background: black;
+    padding: 10px;
+    font-size: 0.75rem;
+    border-radius: 6px;
+  }
+
+  input {
+    width: 100%;
+    padding: 8px;
+    margin-top: 8px;
+    background: black;
+    border: 1px solid #333;
+    color: white;
+  }
+
+  .btn {
+    margin-top: 8px;
+    padding: 8px;
+    width: 100%;
+    background: linear-gradient(90deg, #00e0ff, #7cffc4);
+    border: none;
+    color: black;
+    cursor: pointer;
+    border-radius: 6px;
+    font-weight: bold;
+  }
+
+  footer {
+    text-align: center;
+    padding: 12px;
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+</style>
+</head>
+
+<body>
+
+<header>
+  <h1>3DVR DIGITAL ORGANISM</h1>
+  <p>A self-replicating, evolving network</p>
+</header>
+
+<div class="grid">
+
+  <!-- MOTHERSHIP -->
+  <div class="card">
+    <h2>🧠 Mothership</h2>
+    <div class="node">
+      Genome Version <span class="status">v1.0.0</span>
+    </div>
+    <div class="node">
+      Nodes Connected <span class="status" id="nodeCount">3</span>
+    </div>
+    <div class="node">
+      Status <span class="status">ACTIVE</span>
+    </div>
+  </div>
+
+  <!-- WORKERS -->
+  <div class="card">
+    <h2>🤖 Worker Nodes</h2>
+    <div id="workers"></div>
+  </div>
+
+  <!-- SCOUTS -->
+  <div class="card">
+    <h2>🛰️ Scouts</h2>
+    <div id="scouts"></div>
+  </div>
+
+  <!-- CONSOLE -->
+  <div class="card" style="grid-column: span 2;">
+    <h2>💻 Node Console</h2>
+    <div class="console" id="console"></div>
+    <input id="commandInput" placeholder="Enter command..." />
+    <button class="btn" onclick="runCommand()">Run</button>
+  </div>
+
+  <!-- EVOLUTION -->
+  <div class="card">
+    <h2>🧬 Evolution Loop</h2>
+    <div class="node">Deploy</div>
+    <div class="node">Observe</div>
+    <div class="node">Evaluate</div>
+    <div class="node">Mutate</div>
+    <div class="node">Redeploy</div>
+  </div>
+
+</div>
+
+<footer>
+  3dvr.tech — digital life in progress
+</footer>
+
+<script>
+  const consoleEl = document.getElementById("console");
+
+  function log(msg) {
+    consoleEl.innerHTML += msg + "<br>";
+    consoleEl.scrollTop = consoleEl.scrollHeight;
+  }
+
+  function runCommand() {
+    const input = document.getElementById("commandInput");
+    const cmd = input.value.trim();
+    input.value = "";
+
+    log("> " + cmd);
+
+    if (cmd === "spawn worker") {
+      spawnWorker();
+    } else if (cmd === "spawn scout") {
+      spawnScout();
+    } else if (cmd === "status") {
+      log("Nodes active. System stable.");
+    } else {
+      log("Unknown command.");
+    }
+  }
+
+  let workers = [];
+  let scouts = [];
+
+  function spawnWorker() {
+    const id = "worker-" + Math.floor(Math.random() * 9999);
+    workers.push(id);
+    render();
+    log("Spawned " + id);
+  }
+
+  function spawnScout() {
+    const id = "scout-" + Math.floor(Math.random() * 9999);
+    scouts.push(id);
+    render();
+    log("Scout deployed: " + id);
+  }
+
+  function render() {
+    const workerEl = document.getElementById("workers");
+    const scoutEl = document.getElementById("scouts");
+
+    workerEl.innerHTML = "";
+    scoutEl.innerHTML = "";
+
+    workers.forEach(w => {
+      workerEl.innerHTML += `<div class="node">${w} <span class="status">RUNNING</span></div>`;
+    });
+
+    scouts.forEach(s => {
+      scoutEl.innerHTML += `<div class="node">${s} <span class="status">EXPLORING</span></div>`;
+    });
+
+    document.getElementById("nodeCount").innerText =
+      workers.length + scouts.length + 1;
+  }
+
+  // initial seed
+  spawnWorker();
+  spawnWorker();
+  spawnScout();
+
+  log("3dvr organism initialized...");
+</script>
+
+</body>
+</html>
