@@ -14,5 +14,10 @@ jobs:
           python-version: '3.12'
       - name: Run organism self-evaluation
         run: python organism.py eval
-      - name: Run provider boundary tests
-        run: python -m unittest -v test_providers.py
+      - name: Run unit tests
+        run: python -m unittest -v test_organism.py test_import_chatgpt.py test_providers.py
+      - name: Run Remember Me retrieval scorecard
+        run: |
+          export ORGANISM_DB="$RUNNER_TEMP/remember-me.db"
+          python organism.py ingest examples/remember_me_seed.jsonl
+          python organism.py score evals/remember_me.json --min-score 1.0
