@@ -14,3 +14,5 @@ jobs:
           python-version: '3.12'
       - name: Run organism self-evaluation
         run: python organism.py eval
+      - name: Run provider boundary tests
+        run: python -m unittest -v test_providers.py
