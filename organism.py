@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Tiny seed for the 3DVR Digital Organism.
 
-Stdlib-only local memory store. This is intentionally simple: prove durable memory,
-provenance, retrieval, correction/deletion, and evaluation before adding model or
-vector-database complexity.
+Stdlib-only local memory store. Prove durable memory, provenance, retrieval,
+correction/deletion, and evaluation before adding model or vector complexity.
 """
 
 from __future__ import annotations
@@ -19,7 +18,7 @@ from pathlib import Path
 
 from providers import make_provider
 
-DB_PATH = Path("organism.db")
+DB_PATH = Path(os.getenv("ORGANISM_DB", "organism.db"))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS memories (
@@ -37,6 +36,15 @@ CREATE TABLE IF NOT EXISTS memories (
 );
 CREATE INDEX IF NOT EXISTS idx_memories_created_at ON memories(created_at);
 CREATE INDEX IF NOT EXISTS idx_memories_subject ON memories(subject);
+CREATE INDEX IF NOT EXISTS idx_memories_source ON memories(source_type, source_id);
+
+CREATE TABLE IF NOT EXISTS memory_revisions (
+    id TEXT PRIMARY KEY,
+    old_memory_id TEXT NOT NULL,
+    new_memory_id TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT 'correction',
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -59,8 +67,18 @@ def remember(
     source_type: str = "manual",
     source_id: str | None = None,
 ) -> str:
-    memory_id = f"mem_{uuid.uuid4().hex[:12]}"
+    """Store one durable memory, deduplicating stable provenance when present."""
     with connect() as db:
+        if source_id:
+            existing = db.execute(
+                "SELECT id FROM memories "
+                "WHERE source_type = ? AND source_id = ? AND deleted_at IS NULL",
+                (source_type, source_id),
+            ).fetchone()
+            if existing:
+                return str(existing["id"])
+
+        memory_id = f"mem_{uuid.uuid4().hex[:12]}"
         db.execute(
             "INSERT INTO memories "
             "(id, kind, subject, content, source_type, source_id, created_at) "
@@ -82,7 +100,10 @@ def recall(query: str, limit: int = 5) -> list[tuple[float, sqlite3.Row]]:
     q = tokens(query)
     with connect() as db:
         rows = db.execute(
-            "SELECT * FROM memories WHERE deleted_at IS NULL"
+            "SELECT * FROM memories "
+            "WHERE deleted_at IS NULL "
+            "AND (valid_until IS NULL OR valid_until > ?)",
+            (now(),),
         ).fetchall()
 
     ranked = []
@@ -102,6 +123,11 @@ def recall(query: str, limit: int = 5) -> list[tuple[float, sqlite3.Row]]:
 
 
 def ingest(path: str) -> int:
+    """Ingest normalized JSONL records.
+
+    Each line may contain content/text/message plus optional kind, subject,
+    source_type and source_id. Stable source IDs make ingestion idempotent.
+    """
     count = 0
     with open(path, "r", encoding="utf-8") as handle:
         for line_no, line in enumerate(handle, 1):
@@ -117,7 +143,7 @@ def ingest(path: str) -> int:
                 kind=str(item.get("kind", "event")),
                 subject=str(item.get("subject", "")),
                 source_type=str(item.get("source_type", "jsonl")),
-                source_id=str(item.get("source_id", f"{path}:{line_no}")),
+                source_id=str(item.get("source_id", f"{Path(path).name}:{line_no}")),
             )
             count += 1
     return count
@@ -128,9 +154,17 @@ def explain(memory_id: str) -> None:
         row = db.execute(
             "SELECT * FROM memories WHERE id = ?", (memory_id,)
         ).fetchone()
+        revisions = db.execute(
+            "SELECT * FROM memory_revisions "
+            "WHERE old_memory_id = ? OR new_memory_id = ? "
+            "ORDER BY created_at",
+            (memory_id, memory_id),
+        ).fetchall()
     if not row:
         raise SystemExit(f"Memory not found: {memory_id}")
-    print(json.dumps(dict(row), indent=2))
+    payload = dict(row)
+    payload["revisions"] = [dict(revision) for revision in revisions]
+    print(json.dumps(payload, indent=2))
 
 
 def forget(memory_id: str) -> None:
@@ -144,9 +178,57 @@ def forget(memory_id: str) -> None:
         raise SystemExit(f"Active memory not found: {memory_id}")
 
 
+def correct(memory_id: str, content: str, *, reason: str = "correction") -> str:
+    """Replace an active memory while preserving an auditable revision edge."""
+    with connect() as db:
+        old = db.execute(
+            "SELECT * FROM memories WHERE id = ? AND deleted_at IS NULL",
+            (memory_id,),
+        ).fetchone()
+        if not old:
+            raise SystemExit(f"Active memory not found: {memory_id}")
+
+        new_id = f"mem_{uuid.uuid4().hex[:12]}"
+        created = now()
+        db.execute(
+            "INSERT INTO memories "
+            "(id, kind, subject, content, source_type, source_id, created_at, "
+            "valid_until, confidence, importance) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                new_id,
+                old["kind"],
+                old["subject"],
+                content,
+                old["source_type"],
+                old["source_id"],
+                created,
+                old["valid_until"],
+                old["confidence"],
+                old["importance"],
+            ),
+        )
+        db.execute(
+            "UPDATE memories SET deleted_at = ? WHERE id = ?",
+            (created, memory_id),
+        )
+        db.execute(
+            "INSERT INTO memory_revisions "
+            "(id, old_memory_id, new_memory_id, reason, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                f"rev_{uuid.uuid4().hex[:12]}",
+                memory_id,
+                new_id,
+                reason,
+                created,
+            ),
+        )
+    return new_id
+
+
 def context_for(query: str, limit: int = 5) -> str:
     """Build the auditable user-owned context supplied to a reasoning provider."""
-
     hits = recall(query, limit)
     if not hits:
         return "No relevant stored memories were retrieved."
@@ -196,6 +278,43 @@ def ask(
         {"role": "user", "content": prompt},
     ]
     return provider.complete(messages)
+
+
+def evaluate_suite(path: str, limit: int = 5) -> dict[str, object]:
+    """Evaluate deterministic retrieval without requiring any external model."""
+    suite = json.loads(Path(path).read_text(encoding="utf-8"))
+    cases = suite["cases"] if isinstance(suite, dict) else suite
+    results = []
+    passed = 0
+
+    for case in cases:
+        hits = recall(str(case["question"]), limit=limit)
+        retrieved = "\n".join(str(row["content"]) for _, row in hits).lower()
+        expected_all = [str(term).lower() for term in case.get("expected_all", [])]
+        expected_any = [str(term).lower() for term in case.get("expected_any", [])]
+        forbidden = [str(term).lower() for term in case.get("forbidden", [])]
+
+        all_ok = all(term in retrieved for term in expected_all)
+        any_ok = not expected_any or any(term in retrieved for term in expected_any)
+        forbidden_ok = all(term not in retrieved for term in forbidden)
+        ok = all_ok and any_ok and forbidden_ok
+        passed += int(ok)
+        results.append(
+            {
+                "name": case.get("name", case["question"]),
+                "passed": ok,
+                "retrieved_ids": [row["id"] for _, row in hits],
+            }
+        )
+
+    total = len(results)
+    return {
+        "suite": suite.get("name", Path(path).stem) if isinstance(suite, dict) else Path(path).stem,
+        "passed": passed,
+        "total": total,
+        "score": (passed / total) if total else 1.0,
+        "cases": results,
+    }
 
 
 def self_eval() -> int:
@@ -258,6 +377,16 @@ def main() -> int:
     p = sub.add_parser("forget")
     p.add_argument("memory_id")
 
+    p = sub.add_parser("correct")
+    p.add_argument("memory_id")
+    p.add_argument("content")
+    p.add_argument("--reason", default="correction")
+
+    p = sub.add_parser("score")
+    p.add_argument("suite")
+    p.add_argument("--limit", type=int, default=5)
+    p.add_argument("--min-score", type=float, default=0.0)
+
     sub.add_parser("eval")
 
     args = parser.parse_args()
@@ -293,6 +422,12 @@ def main() -> int:
     elif args.command == "forget":
         forget(args.memory_id)
         print(f"forgot {args.memory_id}")
+    elif args.command == "correct":
+        print(correct(args.memory_id, args.content, reason=args.reason))
+    elif args.command == "score":
+        result = evaluate_suite(args.suite, limit=args.limit)
+        print(json.dumps(result, indent=2))
+        return 0 if float(result["score"]) >= args.min_score else 1
     elif args.command == "eval":
         return self_eval()
     return 0

@@ -2,3 +2,4 @@ organism.db
 *.db-journal
 __pycache__/
 .venv/
+data/private/
