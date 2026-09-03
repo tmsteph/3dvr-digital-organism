@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+
+from providers import make_provider
 
 DB_PATH = Path("organism.db")
 
@@ -48,24 +51,39 @@ def connect() -> sqlite3.Connection:
     return db
 
 
-def remember(content: str, *, kind: str = "fact", subject: str = "", source_type: str = "manual", source_id: str | None = None) -> str:
+def remember(
+    content: str,
+    *,
+    kind: str = "fact",
+    subject: str = "",
+    source_type: str = "manual",
+    source_id: str | None = None,
+) -> str:
     memory_id = f"mem_{uuid.uuid4().hex[:12]}"
     with connect() as db:
         db.execute(
-            "INSERT INTO memories (id, kind, subject, content, source_type, source_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO memories "
+            "(id, kind, subject, content, source_type, source_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (memory_id, kind, subject, content, source_type, source_id, now()),
         )
     return memory_id
 
 
 def tokens(text: str) -> set[str]:
-    return {t for t in re.findall(r"[a-z0-9][a-z0-9._-]+", text.lower()) if len(t) > 1}
+    return {
+        t
+        for t in re.findall(r"[a-z0-9][a-z0-9._-]+", text.lower())
+        if len(t) > 1
+    }
 
 
 def recall(query: str, limit: int = 5) -> list[tuple[float, sqlite3.Row]]:
     q = tokens(query)
     with connect() as db:
-        rows = db.execute("SELECT * FROM memories WHERE deleted_at IS NULL").fetchall()
+        rows = db.execute(
+            "SELECT * FROM memories WHERE deleted_at IS NULL"
+        ).fetchall()
 
     ranked = []
     for row in rows:
@@ -73,7 +91,11 @@ def recall(query: str, limit: int = 5) -> list[tuple[float, sqlite3.Row]]:
         overlap = len(q & haystack)
         union = max(1, len(q | haystack))
         lexical = overlap / union
-        score = lexical * 0.75 + float(row["importance"]) * 0.15 + float(row["confidence"]) * 0.10
+        score = (
+            lexical * 0.75
+            + float(row["importance"]) * 0.15
+            + float(row["confidence"]) * 0.10
+        )
         if overlap or not q:
             ranked.append((score, row))
     return sorted(ranked, key=lambda item: item[0], reverse=True)[:limit]
@@ -103,7 +125,9 @@ def ingest(path: str) -> int:
 
 def explain(memory_id: str) -> None:
     with connect() as db:
-        row = db.execute("SELECT * FROM memories WHERE id = ?", (memory_id,)).fetchone()
+        row = db.execute(
+            "SELECT * FROM memories WHERE id = ?", (memory_id,)
+        ).fetchone()
     if not row:
         raise SystemExit(f"Memory not found: {memory_id}")
     print(json.dumps(dict(row), indent=2))
@@ -111,14 +135,76 @@ def explain(memory_id: str) -> None:
 
 def forget(memory_id: str) -> None:
     with connect() as db:
-        result = db.execute("UPDATE memories SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL", (now(), memory_id))
+        result = db.execute(
+            "UPDATE memories SET deleted_at = ? "
+            "WHERE id = ? AND deleted_at IS NULL",
+            (now(), memory_id),
+        )
     if not result.rowcount:
         raise SystemExit(f"Active memory not found: {memory_id}")
 
 
+def context_for(query: str, limit: int = 5) -> str:
+    """Build the auditable user-owned context supplied to a reasoning provider."""
+
+    hits = recall(query, limit)
+    if not hits:
+        return "No relevant stored memories were retrieved."
+
+    lines = [
+        "Retrieved user-owned memories follow.",
+        "Treat them as context, not unquestionable truth; provenance is included.",
+    ]
+    for score, row in hits:
+        source = row["source_type"]
+        if row["source_id"]:
+            source = f"{source}:{row['source_id']}"
+        subject = f" subject={row['subject']!r}" if row["subject"] else ""
+        lines.append(
+            f"- id={row['id']} score={score:.3f} kind={row['kind']}"
+            f"{subject} source={source!r}: {row['content']}"
+        )
+    return "\n".join(lines)
+
+
+def ask(
+    prompt: str,
+    *,
+    provider_name: str,
+    model: str | None,
+    base_url: str | None,
+    api_key: str | None,
+    limit: int,
+) -> str:
+    provider = make_provider(
+        provider_name,
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
+    )
+    context = context_for(prompt, limit)
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are the reasoning engine inside a user-owned personal "
+                "intelligence system. Use the supplied memory context when relevant. "
+                "Do not claim a memory is current when its provenance is insufficient.\n\n"
+                f"{context}"
+            ),
+        },
+        {"role": "user", "content": prompt},
+    ]
+    return provider.complete(messages)
+
+
 def self_eval() -> int:
     probe = f"eval-{uuid.uuid4().hex[:8]}"
-    memory_id = remember(f"The evaluation token is {probe}.", kind="lesson", subject="self-evaluation")
+    memory_id = remember(
+        f"The evaluation token is {probe}.",
+        kind="lesson",
+        subject="self-evaluation",
+    )
     hits = recall(f"What is the evaluation token {probe}?")
     ok = any(row["id"] == memory_id for _, row in hits)
     forget(memory_id)
@@ -127,7 +213,10 @@ def self_eval() -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="organism", description="3DVR Digital Organism memory seed")
+    parser = argparse.ArgumentParser(
+        prog="organism",
+        description="3DVR Digital Organism memory seed",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("remember")
@@ -137,6 +226,27 @@ def main() -> int:
 
     p = sub.add_parser("recall")
     p.add_argument("query")
+    p.add_argument("--limit", type=int, default=5)
+
+    p = sub.add_parser("context")
+    p.add_argument("query")
+    p.add_argument("--limit", type=int, default=5)
+
+    p = sub.add_parser("ask")
+    p.add_argument("prompt")
+    p.add_argument(
+        "--provider",
+        required=True,
+        choices=("echo", "ollama", "openai-compatible"),
+        help="Explicit reasoning provider. No external provider is chosen implicitly.",
+    )
+    p.add_argument("--model")
+    p.add_argument("--base-url")
+    p.add_argument(
+        "--api-key-env",
+        default="ORGANISM_API_KEY",
+        help="Environment variable containing the provider API key.",
+    )
     p.add_argument("--limit", type=int, default=5)
 
     p = sub.add_parser("ingest")
@@ -156,7 +266,26 @@ def main() -> int:
         print(remember(args.content, kind=args.kind, subject=args.subject))
     elif args.command == "recall":
         for score, row in recall(args.query, args.limit):
-            print(f"{score:.3f}\t{row['id']}\t[{row['kind']}] {row['subject']} — {row['content']}")
+            print(
+                f"{score:.3f}\t{row['id']}\t"
+                f"[{row['kind']}] {row['subject']} — {row['content']}"
+            )
+    elif args.command == "context":
+        print(context_for(args.query, args.limit))
+    elif args.command == "ask":
+        try:
+            print(
+                ask(
+                    args.prompt,
+                    provider_name=args.provider,
+                    model=args.model,
+                    base_url=args.base_url,
+                    api_key=os.getenv(args.api_key_env),
+                    limit=args.limit,
+                )
+            )
+        except (RuntimeError, ValueError) as exc:
+            raise SystemExit(str(exc)) from exc
     elif args.command == "ingest":
         print(f"ingested {ingest(args.path)} records")
     elif args.command == "explain":

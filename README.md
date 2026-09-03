@@ -35,6 +35,30 @@ The system should feel continuously alive while keeping long-term memory separat
 
 See [`docs/architecture.md`](docs/architecture.md) for the first design sketch and [`ROADMAP.md`](ROADMAP.md) for the seed milestones.
 
+## Provider Independence
+
+The organism owns memory and builds context locally. A reasoning model is attached only through the small provider boundary in [`providers.py`](providers.py).
+
+No external provider is selected implicitly. You choose one each time you use `ask`, and `context` lets you inspect the exact retrieved memory context first.
+
+```bash
+python organism.py context "what servers are we using?"
+
+# Fully local reasoning through Ollama
+python organism.py ask "what servers are we using?" \
+  --provider ollama \
+  --model qwen3:8b
+
+# Any hosted or local server implementing /v1/chat/completions
+export ORGANISM_API_KEY="..."
+python organism.py ask "what servers are we using?" \
+  --provider openai-compatible \
+  --base-url https://example.invalid/v1 \
+  --model example-model
+```
+
+The wire format can be compatible with an existing API without making that company a dependency. The memory database, retrieval logic, context builder, and evaluation loop remain ours.
+
 ## First Milestone
 
 Build a tiny local service that can ingest a conversation, extract durable memory records, retrieve relevant records for a new prompt, and expose why each memory was selected.
@@ -44,3 +68,5 @@ No fine-tuning is required for v0.1. If memory and retrieval are excellent, the 
 ## Status
 
 🌱 Seed planted — September 2026.
+
+The first provider-independent reasoning seam is implemented: local Ollama and generic compatible endpoints can consume the same user-owned memory context without vendor SDK dependencies.
