@@ -21,8 +21,18 @@ The system should feel continuously alive while keeping long-term memory separat
 - **Retrieval before retraining** — fresh facts belong in memory first.
 - **Provenance** — memories retain their source, time, confidence, and revision history.
 - **Continual learning with gates** — new adapters/models are promoted only when evaluations improve.
+- **Discover, don't encode** — prefer general search, retrieval, learning, and evaluation mechanisms that improve with more compute and experience over increasingly elaborate hand-authored intelligence.
+- **Preserve experience** — keep raw evidence available so today's abstractions can be challenged and rebuilt tomorrow.
 - **Local-first where practical** — sensitive archives should not require a third-party cloud.
 - **Open source** — the organism should survive any single company, API, or model.
+
+### The Bitter Lesson
+
+The architecture is explicitly influenced by Rich Sutton's 2019 essay [*The Bitter Lesson*](https://www.incompleteideas.net/IncIdeas/BitterLesson.html): general methods that can effectively use increasing computation, especially search and learning, tend to outlast systems built around hand-crafted domain knowledge.
+
+For the Digital Organism, that means human knowledge should primarily shape **purpose, permissions, interfaces, constraints, and evaluations**. The organism itself should increasingly discover useful memories, relationships, strategies, abstractions, and workflows from experience.
+
+Human-designed structure is still useful when it makes the system safer, more inspectable, or easier to learn from. The test is whether a design helps the organism keep improving as data, experience, models, and compute grow—or freezes today's understanding into tomorrow's architecture.
 
 ## Seed Architecture
 
